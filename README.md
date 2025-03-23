@@ -51,7 +51,6 @@ Loads necessary packages using `pacman` and `library()`, including:
   - `sentiment_qdap`
   - `sentiment_blob`
   - `sentiment_vader`
-  - `sentiment_total`
 - Computes and prints classification accuracy.
 
 ### 8. Confusion Matrices  
