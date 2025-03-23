@@ -1,278 +1,208 @@
-# ------------------------- Libraries ---------------------------------------------------
-# Load required libraries for data manipulation, cleaning, and model evaluation.
-library(dplyr)         # For general data manipulation
-library(janitor)       # For cleaning column names
-library(MASS)          # For AIC/BIC
-library(gridExtra)
-library(fmsb)  # For radar chart
-library(RColorBrewer)  # For color palettes
+# ------------------------- Load Libraries ---------------------------------------------------
+library(dplyr)         # General data manipulation
+library(janitor)       # Cleaning column names
+library(MASS)          # AIC/BIC calculations
+library(gridExtra)     # Arranging multiple plots
+library(fmsb)          # Radar chart visualization
+library(RColorBrewer)  # Color palettes
+library(pacman)  
 
+# Load necessary libraries using pacman
+pacman::p_load(party, caret, knitr, kableExtra, ggplot2, tidyr, reshape2, ROSE)
 
-library(pacman) 
-pacman::p_load(party, caret, knitr, dplyr, kableExtra, ggplot2, tidyr, reshape2, ROSE)
-# -------------------------- Data Loading and Cleaning -----------------------------------
-# Load the datasets
-sent <- as.data.frame(read.csv("SentimentAnalysis_control.csv"))  # Load the sentiment control data
-blob <- as.data.frame(read.csv("TextBlob_control.csv"))  # Load data with additional sentiment scores
-emotions <- as.data.frame(read.csv("tokens_emotion.csv"))
+# -------------------------- Load and Clean Data -----------------------------------
+sent <- read.csv("SentimentAnalysis_control.csv") %>% as.data.frame()
+blob <- read.csv("TextBlob_control.csv") %>% as.data.frame()
+vader <- read.csv("vader_control.csv") %>% as.data.frame()
+emotions <- read.csv("tokens_emotion.csv") %>% as.data.frame()
 
-# Clean the column names to ensure uniformity (e.g., converting spaces to underscores)
+# Clean column names
 sent <- clean_names(sent)
 blob <- clean_names(blob)
+vader <- clean_names(vader)
 emotions <- clean_names(emotions)
 
-# Add sentiment_blob column from the 'blob' dataset to 'sent'
+# Add sentiment scores from other datasets
 sent$polarity_blob <- blob$polarity
-sent$emotions <- emotions$emotions - 4 #transformed for polarity
+sent$compound_vader <- vader$compound
+sent$emotions <- emotions$emotions - 4  # Transform for polarity
 
-# Create normalized scores for the sentiment variables (sentiment_gi, sentiment_he, sentiment_qdap, sentiment_blob)
+# Ensure 'word_count' exists
+if (!"word_count" %in% colnames(sent)) {
+  stop("Error: `word_count` column is missing from the dataset.")
+}
+
+# Normalize sentiment scores
 sent <- sent %>%
   mutate(sentiment_gi = sentiment_gi / word_count,
          sentiment_he = sentiment_he / word_count,    
          sentiment_qdap = sentiment_qdap / word_count,  
-         sentiment_blob = polarity_blob / word_count) %>% 
-  mutate(sentiment_total = rowSums(across(c(sentiment_gi, sentiment_he, sentiment_qdap, sentiment_blob)), na.rm = TRUE))
+         sentiment_blob = polarity_blob / word_count,
+         sentiment_vader = compound_vader / word_count) %>% 
+  mutate(sentiment_total = rowSums(across(c(sentiment_gi, sentiment_he, sentiment_qdap, sentiment_blob, sentiment_vader)), na.rm = TRUE))
 
+# Select only relevant columns
+sent <- sent[, c("sentiment_gi", "sentiment_he", "sentiment_qdap", "sentiment_blob", "sentiment_vader", "emotions", "sentiment_total")]
 
-sent <- sent[, c("sentiment_gi", "sentiment_he", "sentiment_qdap", "sentiment_blob", "emotions", "sentiment_total")] #Create a data set with only the relevant information
+# Convert 'emotions' to ordered factor
+sent$emotions <- factor(sent$emotions, ordered = TRUE)
 
-# -------------------------- Create Variables -----------------------------------
-# Make sure 'emotions' is an ordered factor, and predictors are continuous
-sentiment_gi <- sent$sentiment_gi
-sentiment_he <- sent$sentiment_he 
-sentiment_qdap <- sent$sentiment_qdap
-sentiment_blob <- sent$sentiment_blob
-sentiment_total <- sent$sentiment_total
-summary(sent[,2:(ncol(sent)-1)])
+# -------------------------- Compute Class Weights Before Oversampling -------------------
+class_counts_original <- table(sent$emotions)  # Original class distribution
+inverse_weights <- 1 / class_counts_original  # Compute inverse frequencies
+log_weights <- log(1 + inverse_weights)  # Apply log smoothing
 
-# dependent variable
-emotions <- factor(sent$emotions, ordered = TRUE)  
+# Scale weights so that they sum to the total number of observations
+scaled_weights <- (log_weights / sum(log_weights)) * length(sent$emotions)
 
-kable(table(sent$emotions),
-      col.names = c("emotions", "Frequency"), align = 'l')  %>%
-  kable_styling(bootstrap_options = "striped", full_width = F, position = "left")
+# Assign weights to each class in the original data
+original_weights <- setNames(scaled_weights, levels(sent$emotions))
 
-# Data Sampling -----------------------------------------------------------
+# -------------------------- Perform Oversampling -----------------------------------
+target_freq <- 78  # Target frequency per class
 
-
-#### -------------------------- Cost-Sensitive Learning: Apply Class Weights -------------------
-## Calculate class weights inversely proportional to class frequencies
-class_weights <- table(sent$emotions)  # Class frequencies
-inverse_weights <- 1 / class_weights   # Inverse of class frequencies
-
-# Logarithmic scaling to smooth extreme weights and avoid over-penalizing certain classes
-log_weights <- log(1 + inverse_weights)  # Apply log scaling
-
-# Proportional scaling: Scale the weights to match the number of observations
-total_obs <- length(sent$emotions)  # Total number of observations
-scaled_weights <- round(log_weights / sum(log_weights) * total_obs)  # Normalize and scale
-
-# Assign the scaled weights to each observation based on their class
-weights <- sapply(sent$emotions, function(x) scaled_weights[as.character(x)])
-
-# Ensure weights are positive integers (replace 0 or negative weights with 1)
-weights[weights <= 0] <- 1
-weights <- as.integer(weights)  # Ensure weights are integers
-
-
-#### -------------------------- Oversampling -------------------
-# Set target frequency for each emotions level
-target_freq <- 78
-
-# Oversample the dataset manually
 sent_corrected <- sent %>%
   group_by(emotions) %>%
   sample_n(size = target_freq, replace = TRUE) %>%
   ungroup()
 
-# Display the table showing the distribution of 'Class' after oversampling
-kable(table(sent_corrected$emotions),
-      col.names = c("emotions", "Frequency"), align = 'l') %>%
-  kable_styling(bootstrap_options = "striped", full_width = F, position = "left")
-
-sent <- sent_corrected
-
-# -------------------------- Data Splitting -------------------------------------
-# Split the data into training (80%) and testing (20%) sets for model evaluation
-set.seed(123)  # Set seed for reproducibility
-train_indices <- createDataPartition(emotions, p = 0.8, list = FALSE)
-
-# Subset the data into training and test sets
-train_data <- sent[train_indices, ]
-test_data <- sent[-train_indices, ]
-
-# Check the size of the training and test sets
-cat("Training set size:", nrow(train_data), "\n")
-cat("Test set size:", nrow(test_data), "\n")
-
-# -------------------------- Train and Evaluate Each Predictor Model in a Series -----------------------------
-
-# Prepare data subsets for each predictor
-train_gi <- data.frame(emotions = emotions[train_indices], gi = sentiment_gi[train_indices])
-test_gi <- data.frame(emotions = emotions[-train_indices], gi = sentiment_gi[-train_indices])
-
-train_he <- data.frame(emotions = emotions[train_indices], he = sentiment_he[train_indices])
-test_he <- data.frame(emotions = emotions[-train_indices], he = sentiment_he[-train_indices])
-
-train_qdap <- data.frame(emotions = emotions[train_indices], qdap = sentiment_qdap[train_indices])
-test_qdap <- data.frame(emotions = emotions[-train_indices], qdap = sentiment_qdap[-train_indices])
-
-train_blob <- data.frame(emotions = emotions[train_indices], blob = sentiment_blob[train_indices])
-test_blob <- data.frame(emotions = emotions[-train_indices], blob = sentiment_blob[-train_indices])
-
-# Train and evaluate model for 'gi' using ctree with cost-sensitive learning
-cat("\nTraining model for 'gi' predictor using ctree with Cost-Sensitive Learning...\n")
-ctree_gi <- ctree(emotions ~ gi, data = train_gi, weights = weights[train_indices])  # Pass weights here
-pred_gi <- predict(ctree_gi, newdata = test_gi, type = "response")
-pred_gi <- factor(pred_gi, levels = levels(test_gi$emotions), ordered = TRUE)
-accuracy_gi <- mean(pred_gi == test_gi$emotions)
-cat("Accuracy for 'gi' predictor:", accuracy_gi, "\n")
-
-# Train and evaluate model for 'he' using ctree with cost-sensitive learning
-cat("\nTraining model for 'he' predictor using ctree with Cost-Sensitive Learning...\n")
-ctree_he <- ctree(emotions ~ he, data = train_he, weights = weights[train_indices])  # Pass weights here
-pred_he <- predict(ctree_he, newdata = test_he, type = "response")
-pred_he <- factor(pred_he, levels = levels(test_he$emotions), ordered = TRUE)
-accuracy_he <- mean(pred_he == test_he$emotions)
-cat("Accuracy for 'he' predictor:", accuracy_he, "\n")
-
-# Train and evaluate model for 'qdap' using ctree with cost-sensitive learning
-cat("\nTraining model for 'qdap' predictor using ctree with Cost-Sensitive Learning...\n")
-ctree_qdap <- ctree(emotions ~ qdap, data = train_qdap, weights = weights[train_indices])  # Pass weights here
-pred_qdap <- predict(ctree_qdap, newdata = test_qdap, type = "response")
-pred_qdap <- factor(pred_qdap, levels = levels(test_qdap$emotions), ordered = TRUE)
-accuracy_qdap <- mean(pred_qdap == test_qdap$emotions)
-cat("Accuracy for 'qdap' predictor:", accuracy_qdap, "\n")
-
-# Train and evaluate model for 'blob' using ctree with cost-sensitive learning
-cat("\nTraining model for 'blob' predictor using ctree with Cost-Sensitive Learning...\n")
-ctree_blob <- ctree(emotions ~ blob, data = train_blob, weights = weights[train_indices])  # Pass weights here
-pred_blob <- predict(ctree_blob, newdata = test_blob, type = "response")
-pred_blob <- factor(pred_blob, levels = levels(test_blob$emotions), ordered = TRUE)
-accuracy_blob <- mean(pred_blob == test_blob$emotions)
-cat("Accuracy for 'blob' predictor:", accuracy_blob, "\n")
-
-
-# Prepare data subsets for 'sentiment_total'
-train_total <- data.frame(emotions = emotions[train_indices], sentiment_total = sentiment_total[train_indices])
-test_total <- data.frame(emotions = emotions[-train_indices], sentiment_total = sentiment_total[-train_indices])
-
-# Train and evaluate model for 'sentiment_total' using ctree with cost-sensitive learning
-cat("\nTraining model for 'sentiment_total' predictor using ctree with Cost-Sensitive Learning...\n")
-ctree_total <- ctree(emotions ~ sentiment_total, data = train_total, weights = weights[train_indices])  # Pass weights here
-pred_total <- predict(ctree_total, newdata = test_total, type = "response")
-pred_total <- factor(pred_total, levels = levels(test_total$emotions), ordered = TRUE)
-accuracy_total <- mean(pred_total == test_total$emotions)
-cat("Accuracy for 'sentiment_total' predictor:", accuracy_total, "\n")
-
-
-#Print the accuracy results for each predictor
-results <- data.frame(
-  Predictor = c("gi", "he", "qdap", "blob", "sentiment_total"),
-  Accuracy = c(accuracy_gi, accuracy_he, accuracy_qdap, accuracy_blob, accuracy_total)
-)
-
-print(results)
-
-
-# -------------------------- Confusion Matrix for Each Model -------------------------------------
-
-# Confusion matrix for 'gi' predictor
-cat("\nConfusion matrix for 'gi' predictor:\n")
-conf_matrix_gi <- confusionMatrix(pred_gi, test_gi$emotions)
-print(conf_matrix_gi)
-
-# Confusion matrix for 'he' predictor
-cat("\nConfusion matrix for 'he' predictor:\n")
-conf_matrix_he <- confusionMatrix(pred_he, test_he$emotions)
-print(conf_matrix_he)
-
-# Confusion matrix for 'qdap' predictor
-cat("\nConfusion matrix for 'qdap' predictor:\n")
-conf_matrix_qdap <- confusionMatrix(pred_qdap, test_qdap$emotions)
-print(conf_matrix_qdap)
-
-# Confusion matrix for 'blob' predictor
-cat("\nConfusion matrix for 'blob' predictor:\n")
-conf_matrix_blob <- confusionMatrix(pred_blob, test_blob$emotions)
-print(conf_matrix_blob)
-
-# Confusion matrix for 'total' predictor
-cat("\nConfusion matrix for 'sentiment_total' predictor:\n")
-conf_matrix_total <- confusionMatrix(pred_total, test_total$emotions)
-print(conf_matrix_total)
-
-
-## Confusion Matrix Plot ---------------------------------------------------
-#frequency refers to the number of occurrences of each combination of predicted and actual classes. 
-#It represents how often a particular pair of predicted and actual outcomes occurs in your test dataset.
-
-# Function to plot confusion matrix as a heatmap
-plot_confusion_matrix <- function(conf_matrix, title) {
-  conf_mat <- as.data.frame(conf_matrix$table)
-  colnames(conf_mat) <- c("Prediction", "Reference", "Freq")
-  
-  ggplot(conf_mat, aes(x = Reference, y = Prediction, fill = Freq)) +
-    geom_tile() +
-    geom_text(aes(label = Freq), color = "black") +
-    scale_fill_gradient(low = "#eff6fc", high = "#ff9900") +
-    labs(title = title, x = "Actual Class", y = "Predicted Class") +
-    theme_minimal()
+# Ensure oversampling was successful
+if (nrow(sent_corrected) != target_freq * length(unique(sent_corrected$emotions))) {
+  stop("Error: Oversampling failed, dataset size does not match expected count.")
 }
 
-# Plot confusion matrix for gi pred ictor
-plot_gi <- plot_confusion_matrix(conf_matrix_gi, "GI")
+# Update the dataset
+sent <- sent_corrected
 
-# Plot confusion matrix for he predictor
-plot_he <- plot_confusion_matrix(conf_matrix_he, "HE")
+# -------------------------- Adjust Weights After Oversampling -------------------
+class_counts_new <- table(sent$emotions)  # New class distribution
 
-# Plot confusion matrix for qdap predictor
-plot_qdap <- plot_confusion_matrix(conf_matrix_qdap, "QDAP")
+# Assign original weights but scale them for new distribution
+adjusted_weights <- original_weights[as.character(sent$emotions)]
 
-# Plot confusion matrix for blob predictor
-plot_blob <- plot_confusion_matrix(conf_matrix_blob, "Blob")
+# Normalize weights to reflect the new target frequency of 78
+adjusted_weights <- adjusted_weights * (target_freq / mean(adjusted_weights))
 
-# Plot confusion matrix for sentiment_total predictor
-plot_total <- plot_confusion_matrix(conf_matrix_total, "Total")
+# Ensure weights are integers for ctree()
+adjusted_weights <- as.integer(round(adjusted_weights))
 
+# Ensure weights are positive
+adjusted_weights[is.na(adjusted_weights)] <- 1
+adjusted_weights <- pmax(adjusted_weights, 1)
 
-# Arrange all four plots into a grid
-grid.arrange(plot_gi, plot_he, plot_qdap, plot_blob, plot_total, ncol = 2, nrow = 3)
+# -------------------------- Train-Test Split -----------------------------------
+set.seed(123)  # For reproducibility
+emotions <- sent$emotions
 
+# Perform train-test split
+train_indices <- createDataPartition(emotions, p = 0.8, list = FALSE)
+test_indices <- setdiff(seq_len(nrow(sent)), train_indices)
 
-# -------------------------- Precision, Recall, and F1-Score Calculation -------------------------------------
+# Create train and test datasets
+train_data <- sent[train_indices, ]
+test_data <- sent[test_indices, ]
 
-# Extended function to calculate more metrics from a confusion matrix
-calculate_metrics <- function(conf_matrix) {
-  # Extract the confusion matrix table
-  cm <- conf_matrix$table
+# Subset weights correctly to match new dataset
+train_weights <- adjusted_weights[train_indices]
+test_weights <- adjusted_weights[test_indices]
+
+# Ensure no missing or zero weights
+train_weights[is.na(train_weights)] <- 1
+test_weights[is.na(test_weights)] <- 1
+train_weights <- pmax(train_weights, 1)
+test_weights <- pmax(test_weights, 1)
+
+# Debugging: Check if sizes match
+cat("Train Data Size:", nrow(train_data), " | Train Weights Size:", length(train_weights), "\n")
+cat("Test Data Size:", nrow(test_data), " | Test Weights Size:", length(test_weights), "\n")
+
+# Stop execution if a mismatch occurs
+if (length(train_weights) != nrow(train_data) | length(test_weights) != nrow(test_data)) {
+  stop("🚨 Error: Mismatch between train_weights/test_weights and train_data/test_data size")
+}
+
+# -------------------------- Train and Evaluate Models -----------------------------------
+train_ctree_model <- function(predictor, predictor_name) {
+  cat("\nTraining model for", predictor_name, "using CTree with Cost-Sensitive Learning...\n")
   
-  # Calculate precision, recall, and F1-score for each class
+  # Subset training and testing data
+  train_set <- data.frame(emotions = train_data$emotions, predictor = train_data[[predictor]])
+  test_set <- data.frame(emotions = test_data$emotions, predictor = test_data[[predictor]])
+  
+  # Train CTree model with integer-adjusted weights
+  ctree_model <- ctree(emotions ~ predictor, data = train_set, weights = train_weights)
+  pred <- predict(ctree_model, newdata = test_set, type = "response")
+  
+  # Ensure factor levels match
+  pred <- factor(pred, levels = levels(test_set$emotions), ordered = TRUE)
+  
+  # Compute accuracy
+  accuracy <- mean(pred == test_set$emotions, na.rm = TRUE)
+  cat("Accuracy for", predictor_name, ":", accuracy, "\n")
+  
+  return(list(model = ctree_model, predictions = pred, accuracy = accuracy, test_set = test_set))
+}
+
+# Train models
+models <- list(
+  GI = train_ctree_model("sentiment_gi", "GI"),
+  HE = train_ctree_model("sentiment_he", "HE"),
+  QDAP = train_ctree_model("sentiment_qdap", "QDAP"),
+  BLOB = train_ctree_model("sentiment_blob", "Blob"),
+  VADER = train_ctree_model("sentiment_vader", "VADER"),
+  TOTAL = train_ctree_model("sentiment_total", "Total")
+)
+
+# -------------------------- Generate Accuracy Table -----------------------------------
+accuracy_results <- data.frame(
+  Predictor = names(models),
+  Accuracy = sapply(models, function(x) x$accuracy)
+)
+print(accuracy_results)
+
+# -------------------------- Compute Confusion Matrices for Each Model -----------------------------------
+
+# Function to compute and print confusion matrix
+compute_conf_matrix <- function(pred, actual, predictor_name) {
+  cat("\nConfusion matrix for", predictor_name, "predictor:\n")
+  conf_matrix <- confusionMatrix(pred, actual)
+  print(conf_matrix)
+  return(conf_matrix)
+}
+
+# Compute confusion matrices for each model
+conf_matrices <- list(
+  GI = compute_conf_matrix(models$GI$predictions, models$GI$test_set$emotions, "GI"),
+  HE = compute_conf_matrix(models$HE$predictions, models$HE$test_set$emotions, "HE"),
+  QDAP = compute_conf_matrix(models$QDAP$predictions, models$QDAP$test_set$emotions, "QDAP"),
+  BLOB = compute_conf_matrix(models$BLOB$predictions, models$BLOB$test_set$emotions, "Blob"),
+  VADER = compute_conf_matrix(models$VADER$predictions, models$VADER$test_set$emotions, "VADER"),
+  TOTAL = compute_conf_matrix(models$TOTAL$predictions, models$TOTAL$test_set$emotions, "Total")
+)
+
+# -------------------------- Compute Precision, Recall, F1-Score, Specificity, FPR, FNR -----------------------------------
+
+# Function to calculate metrics from a confusion matrix
+calculate_metrics <- function(conf_matrix) {
+  cm <- conf_matrix$table  # Extract confusion matrix table
+  
+  # Calculate precision, recall, and F1-score
   precision <- diag(cm) / colSums(cm)  # TP / (TP + FP)
   recall <- diag(cm) / rowSums(cm)     # TP / (TP + FN)
   f1_score <- 2 * (precision * recall) / (precision + recall)  # F1-Score
   
-  # Calculate support (the number of true instances for each class)
-  support <- rowSums(cm)               # TP + FN
-  
-  # Calculate accuracy
-  total <- sum(cm)
-  correct <- sum(diag(cm))
-  accuracy <- correct / total          # (TP + TN) / (TP + TN + FP + FN)
-  
-  # Calculate specificity for each class
+  # Calculate specificity, FPR (False Positive Rate), FNR (False Negative Rate)
   TN <- sapply(1:nrow(cm), function(i) sum(cm[-i, -i]))
   FP <- colSums(cm) - diag(cm)
   FN <- rowSums(cm) - diag(cm)
-  specificity <- TN / (TN + FP)        # TN / (TN + FP)
+  specificity <- TN / (TN + FP)  
+  fpr <- FP / (FP + TN)  
+  fnr <- FN / (FN + diag(cm))  
   
-  # Calculate False Positive Rate (FPR)
-  fpr <- FP / (FP + TN)                # FP / (FP + TN)
+  # Compute accuracy
+  accuracy <- sum(diag(cm)) / sum(cm)  
   
-  # Calculate False Negative Rate (FNR)
-  fnr <- FN / (FN + diag(cm))          # FN / (FN + TP)
-  
-  # Handle any NaN results (caused by division by zero)
+  # Handle NaN cases (caused by division by zero)
   precision[is.na(precision)] <- 0
   recall[is.na(recall)] <- 0
   f1_score[is.na(f1_score)] <- 0
@@ -280,7 +210,7 @@ calculate_metrics <- function(conf_matrix) {
   fpr[is.na(fpr)] <- 0
   fnr[is.na(fnr)] <- 0
   
-  # Return all metrics in a data frame
+  # Return as a data frame
   return(data.frame(
     Precision = precision,
     Recall = recall,
@@ -288,121 +218,55 @@ calculate_metrics <- function(conf_matrix) {
     Specificity = specificity,
     FPR = fpr,
     FNR = fnr,
-    Support = support,
-    Accuracy = rep(accuracy, length(precision))  # Accuracy is the same for all classes
+    Accuracy = accuracy
   ))
 }
 
-
-# Confusion matrix for 'gi' predictor
-cat("\nConfusion matrix and precision metrics for 'gi' predictor:\n")
-conf_matrix_gi <- confusionMatrix(pred_gi, test_gi$emotions)
-print(conf_matrix_gi)
-metrics_gi <- calculate_metrics(conf_matrix_gi)
-print(metrics_gi)
-
-# Confusion matrix for 'he' predictor
-cat("\nConfusion matrix and precision metrics for 'he' predictor:\n")
-conf_matrix_he <- confusionMatrix(pred_he, test_he$emotions)
-print(conf_matrix_he)
-metrics_he <- calculate_metrics(conf_matrix_he)
-print(metrics_he)
-
-# Confusion matrix for 'qdap' predictor
-cat("\nConfusion matrix and precision metrics for 'qdap' predictor:\n")
-conf_matrix_qdap <- confusionMatrix(pred_qdap, test_qdap$emotions)
-print(conf_matrix_qdap)
-metrics_qdap <- calculate_metrics(conf_matrix_qdap)
-print(metrics_qdap)
-
-# Confusion matrix for 'blob' predictor
-cat("\nConfusion matrix and precision metrics for 'blob' predictor:\n")
-conf_matrix_blob <- confusionMatrix(pred_blob, test_blob$emotions)
-print(conf_matrix_blob)
-metrics_blob <- calculate_metrics(conf_matrix_blob)
-print(metrics_blob)
-
-# Confusion matrix for 'sentiment_total' predictor
-cat("\nConfusion matrix and precision metrics for 'sentiment_total' predictor:\n")
-conf_matrix_total <- confusionMatrix(pred_total, test_total$emotions)
-print(conf_matrix_total)
-metrics_total <- calculate_metrics(conf_matrix_total)
-print(metrics_total)
-
-
-
-# -------------------------- Combine Precision Metrics -------------------------------------
-
-# Combine precision, recall, and F1 scores for all models
-combined_metrics <- list(
-  gi = metrics_gi,
-  he = metrics_he,
-  qdap = metrics_qdap,
-  blob = metrics_blob,
-  sentiment_total = metrics_total
+# Compute metrics for each model
+metrics_list <- list(
+  GI = calculate_metrics(conf_matrices$GI),
+  HE = calculate_metrics(conf_matrices$HE),
+  QDAP = calculate_metrics(conf_matrices$QDAP),
+  BLOB = calculate_metrics(conf_matrices$BLOB),
+  VADER = calculate_metrics(conf_matrices$VADER),
+  TOTAL = calculate_metrics(conf_matrices$TOTAL)
 )
 
-# Convert the list to a data frame for easier comparison
-combined_metrics_df <- do.call(rbind, lapply(combined_metrics, function(x) round(x, 2)))
-combined_metrics_df$Model <- rep(c("gi", "he", "qdap", "blob", "sentiment_total"), each = nrow(metrics_gi))
+# Convert to a data frame for easier viewing
+metrics_df <- do.call(rbind, metrics_list)
+metrics_df$Model <- rownames(metrics_df)
 
-# Print combined metrics
-print(combined_metrics_df)
+# Print the computed precision-recall metrics
+print(metrics_df)
+
+# -------------------------- Plot Confusion Matrices as Heatmaps -----------------------------------
+
+# Function to plot a confusion matrix as a heatmap
+plot_confusion_matrix <- function(conf_matrix, title) {
+  conf_mat <- as.data.frame(conf_matrix$table)
+  colnames(conf_mat) <- c("Prediction", "Reference", "Freq")
+  
+  ggplot(conf_mat, aes(x = Reference, y = Prediction, fill = Freq)) +
+    geom_tile() +
+    geom_text(aes(label = Freq), color = "black", size = 5) +  # Add frequency labels
+    scale_fill_gradient(low = "blue", high = "red") +  # Color scale
+    labs(title = title, x = "Actual Class", y = "Predicted Class") +
+    theme_minimal(base_size = 14)
+}
+
+# Generate confusion matrix plots for each model
+plot_gi <- plot_confusion_matrix(conf_matrices$GI, "GI Predictor")
+plot_he <- plot_confusion_matrix(conf_matrices$HE, "HE Predictor")
+plot_qdap <- plot_confusion_matrix(conf_matrices$QDAP, "QDAP Predictor")
+plot_blob <- plot_confusion_matrix(conf_matrices$BLOB, "Blob Predictor")
+plot_vader <- plot_confusion_matrix(conf_matrices$VADER, "VADER Predictor")
 
 
-# Calculate macro-averages for precision, recall, and F1-score, specificity, FPR, FNR, support, and accuracy
-macro_precision <- sapply(combined_metrics, function(x) mean(x$Precision))
-macro_recall <- sapply(combined_metrics, function(x) mean(x$Recall))
-macro_f1_scores <- sapply(combined_metrics, function(x) mean(x$F1_Score))
-macro_specificity <- sapply(combined_metrics, function(x) mean(x$Specificity))
-macro_fpr <- sapply(combined_metrics, function(x) mean(x$FPR))
-macro_fnr <- sapply(combined_metrics, function(x) mean(x$FNR))
-macro_accuracy <- sapply(combined_metrics, function(x) mean(x$Accuracy))
+# Arrange and display all confusion matrix plots
+grid.arrange(plot_gi, plot_he, plot_qdap, plot_blob, plot_vader,
+             ncol = 3, nrow = 2)
 
 
 
-# Final plot --------------------------------------------------------------
-display.brewer.all()
-
-# Combine the precision, recall, F1 scores, and accuracy for the radar chart
-radar_data <- data.frame(
-  Model = c("gi", "he", "qdap", "blob", "sentiment_total"),
-  Precision = c(0.1809524, 0.1047619, 0.1251701, 0.1428571, 0.1095238),  # Macro averaged precision values from each model
-  Recall = c(0.05891669, 0.03654485, 0.07818533, 0.03576783, 0.08809524),     # Macro averaged recall values from each model
-  F1_Score = c(0.05724508, 0.05418719, 0.08641359, 0.05324042 , 0.09230769),   # Macro averaged F1-Score values from each model
-  Accuracy = c(0.1154, 0.2115, 0.2308, 0.1346, 0.2115), # Accuracy values for each model
-  Specificity = c(0.8655186, 0.8303663, 0.8591750, 0.8534112, 0.8685030),
-  FPR = c(0.1344814, 0.1696337, 0.1408250, 0.1465888, 0.1314970),
-  FNR = c(0.2267976, 0.3920266, 0.7789575, 0.2499465, 0.9119048)
-)
-
-# Normalize data: Radar charts require a normalized range (typically 0 to 1)
-radar_data_scaled <- as.data.frame(lapply(radar_data[,-1], function(x) (x - min(x)) / (max(x) - min(x))))
-radar_data_scaled$Model <- radar_data$Model
-
-# Add an extra row to represent the max and min of the scales
-radar_data_scaled <- rbind(rep(1, ncol(radar_data_scaled) - 1), rep(0, ncol(radar_data_scaled) - 1), radar_data_scaled[,-ncol(radar_data_scaled)])
-
-# Define the chart colors using RColorBrewer 
-colors_border <- brewer.pal(5, "Set1") 
-colors_fill <- adjustcolor(colors_border, alpha.f=0.2)
-
-# Plot the radar chart
-radarchart(radar_data_scaled, axistype = 1,
-           # Customize the polygon and lines
-           pcol = colors_border, pfcol = colors_fill, plwd = 2, plty = 1,
-           
-           # Customize the grid
-           cglcol = "grey", cglty = 1, axislabcol = "darkgrey", caxislabels = seq(0, 1, 0.2), cglwd = 0.8,
-           
-           # Customize labels
-           vlcex = 0.8
-)
-
-# Define custom labels for the legend
-custom_labels <- c("GI", "HE", "QDAP", "Blob", "Total")
-
-# Add legend with custom labels
-legend(x = 0.7, y = 1.3, legend = custom_labels, bty = "n", pch = 20, col = colors_border, text.col = "black", cex = 0.9, pt.cex = 1.5)
 
 
