@@ -150,7 +150,6 @@ models <- list(
   QDAP = train_ctree_model("sentiment_qdap", "QDAP"),
   BLOB = train_ctree_model("sentiment_blob", "Blob"),
   VADER = train_ctree_model("sentiment_vader", "VADER"),
-  TOTAL = train_ctree_model("sentiment_total", "Total")
 )
 
 # -------------------------- Generate Accuracy Table -----------------------------------
@@ -176,8 +175,7 @@ conf_matrices <- list(
   HE = compute_conf_matrix(models$HE$predictions, models$HE$test_set$emotions, "HE"),
   QDAP = compute_conf_matrix(models$QDAP$predictions, models$QDAP$test_set$emotions, "QDAP"),
   BLOB = compute_conf_matrix(models$BLOB$predictions, models$BLOB$test_set$emotions, "Blob"),
-  VADER = compute_conf_matrix(models$VADER$predictions, models$VADER$test_set$emotions, "VADER"),
-  TOTAL = compute_conf_matrix(models$TOTAL$predictions, models$TOTAL$test_set$emotions, "Total")
+  VADER = compute_conf_matrix(models$VADER$predictions, models$VADER$test_set$emotions, "VADER")
 )
 
 # -------------------------- Compute Precision, Recall, F1-Score, Specificity, FPR, FNR -----------------------------------
@@ -228,8 +226,7 @@ metrics_list <- list(
   HE = calculate_metrics(conf_matrices$HE),
   QDAP = calculate_metrics(conf_matrices$QDAP),
   BLOB = calculate_metrics(conf_matrices$BLOB),
-  VADER = calculate_metrics(conf_matrices$VADER),
-  TOTAL = calculate_metrics(conf_matrices$TOTAL)
+  VADER = calculate_metrics(conf_matrices$VADER) 
 )
 
 # Convert to a data frame for easier viewing
