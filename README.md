@@ -1,119 +1,118 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+README
+Title:
 
-# ctree_SML_sentiment
-Conditional inference trees to compare polarity predictability of several sentiment dictionaries. The sentiment analysis is not performed in this code.
+Evaluating Sentiment Dictionary Predictors for Emotional Classification Using Conditional Inference Trees
+Overview
 
-## Overview
+This R script evaluates the predictive validity of five sentiment dictionaries (GI, HE, QDAP, TextBlob, VADER) in classifying self-rated emotional valence in a dataset of autobiographical texts. The workflow includes preprocessing, oversampling, weighting, model training using conditional inference trees (CTree), and evaluation via classification metrics and visualization.
+Contents
 
-This script performs sentiment analysis using various predictors and evaluates their performance in predicting ordered emotion classes. The key steps include data loading and preprocessing, oversampling to balance class frequencies, applying cost-sensitive learning, training conditional inference tree models (`ctree`), and evaluating model performance with accuracy, precision, recall, F1-scores, specificity, false positive/negative rates, and confusion matrices. Additionally, a radar chart is generated for visual comparison of model metrics.
+The script is structured into the following sections:
 
----
+    Library Loading
+    Loads all required packages for data manipulation, modelling, and visualization (e.g., dplyr, caret, party, fmsb, etc.).
 
-## Key Features
+    Data Loading and Cleaning
 
-1. **Libraries Used**:
-   - Data Manipulation: `dplyr`, `janitor`
-   - Visualization: `ggplot2`, `fmsb`, `gridExtra`, `RColorBrewer`
-   - Modelling: `party`, `caret`, `ROSE`
-   - Formatting: `knitr`, `kableExtra`
+        Imports four datasets: SentimentAnalysis_control.csv, TextBlob_control.csv, vader_control.csv, and tokens_emotion.csv.
 
-2. **Data Preprocessing**:
-   - Datasets loaded: `SentimentAnalysis_control.csv`, `TextBlob_control.csv`, and `tokens_emotion.csv`.
-   - Normalized sentiment scores (`gi`, `he`, `qdap`, `blob`) based on word counts.
-   - Added a composite sentiment score (`sentiment_total`).
-   - Ensured uniform column naming using `janitor`.
+        Standardizes column names and merges sentiment scores from different tools into a unified dataframe sent.
 
-3. **Class Balancing**:
-   - Class weights computed inversely proportional to class frequencies for cost-sensitive learning.
-   - Oversampling performed to ensure uniform class distributions.
+        Sentiment scores are normalized by word count, and a combined score (sentiment_total) is computed.
 
-4. **Data Splitting**:
-   - Dataset split into 80% training and 20% testing sets.
+    Class Weight Computation
 
-5. **Model Training**:
-   - Conditional inference trees (`ctree`) trained for each predictor (`gi`, `he`, `qdap`, `blob`, `sentiment_total`) with cost-sensitive weights.
+        Calculates log-scaled inverse class frequencies to handle class imbalance before oversampling.
 
-6. **Evaluation Metrics**:
-   - Accuracy, precision, recall, F1-scores, specificity, false positive rate (FPR), false negative rate (FNR), and support calculated for each predictor.
-   - Confusion matrices generated and visualized as heatmaps.
+    Oversampling
 
-7. **Visualization**:
-   - Radar chart illustrating model performance across precision, recall, F1-scores, and accuracy.
+        Applies stratified oversampling to balance the class distribution (target frequency: 78 per class).
 
----
+        Ensures the integrity of the dataset after oversampling.
 
-## Script Workflow
+    Adjusted Weight Calculation
 
-### 1. **Setup**
-   - Required libraries are loaded.
-   - Datasets (`sent`, `blob`, `emotions`) are loaded and cleaned.
+        Computes adjusted weights for each sample to reflect original class importance post-oversampling.
 
-### 2. **Data Preprocessing**
-   - Sentiment scores normalized.
-   - New variables created for predictors and the dependent variable (`emotions`).
+        These weights are used in cost-sensitive learning with CTree.
 
-### 3. **Balancing and Sampling**
-   - Weights assigned based on class frequencies for cost-sensitive learning.
-   - Oversampling performed to create balanced classes.
+    Train-Test Split
 
-### 4. **Train-Test Splitting**
-   - Training and test datasets created using an 80-20 split.
+        Splits the dataset into 80% training and 20% test sets.
 
-### 5. **Model Training and Evaluation**
-   - Separate models trained for each predictor using `ctree`.
-   - Predictions compared with actual values in the test set.
-   - Confusion matrices generated and evaluated for each model.
+        Aligns sample weights accordingly and performs integrity checks.
 
-### 6. **Metric Calculation**
-   - Precision, recall, F1-scores, specificity, FPR, and FNR calculated for all predictors.
-   - Combined metrics presented in a tabular format.
+    Model Training
 
-### 7. **Visualization**
-   - Heatmaps plotted for confusion matrices.
-   - Radar chart created to compare model metrics.
+        Trains CTree models separately for each sentiment predictor (GI, HE, QDAP, Blob, VADER, Total).
 
----
+        Evaluates each model’s classification accuracy on the test set.
 
-## Files Required
+    Confusion Matrices
 
-- **Input Datasets**:
-  - `SentimentAnalysis_control.csv` database with the data from the sentiment analysis
-  - `TextBlob_control.csv` database with the data from the sentiment analysis
-  - `tokens_emotion.csv` database with the data for training and testing
+        Generates and prints confusion matrices for each model.
 
-- **Output**:
-  - Combined metrics table
-  - Confusion matrix visualizations
-  - Radar chart comparing model performance
+        Visualizes them as heatmaps using ggplot2.
 
----
+    Performance Metrics
 
-## How to Run
+        Computes precision, recall, F1-score, specificity, false positive rate (FPR), false negative rate (FNR), and accuracy from the confusion matrices.
 
-1. Place the input CSV files in the working directory.
-2. Install the required R packages.
-3. Run the script in R or RStudio.
-4. Review the printed metrics, confusion matrices, and visualizations.
+    Visualization
 
----
+        Plots all confusion matrices as heatmaps.
 
-## Results
+        Visualizes each CTree model structure.
 
-- Model performance is summarized in a radar chart and confusion matrix heatmaps.
-- Accuracy, precision, recall, and F1-scores provide insight into the strengths and weaknesses of each predictor.
+        Generates a radar chart to compare performance metrics across models.
 
----
+Files Required
 
-## Dependencies
+Make sure the following files are in your working directory:
 
-Ensure the following R packages are installed:
-- `dplyr`, `janitor`, `party`, `caret`, `MASS`, `ggplot2`, `reshape2`, `fmsb`, `gridExtra`, `RColorBrewer`, `ROSE`, `knitr`, `kableExtra`.
+    SentimentAnalysis_control.csv
 
----
+    TextBlob_control.csv
 
-## Author
+    vader_control.csv
 
-Claudia Morales Valiente  
-Cognitive Developmental and Brain Science Program  
-University of Western Ontario
-cmorale7@uwo.ca
+    tokens_emotion.csv
+
+How to Run
+
+    Open R or RStudio.
+
+    Ensure all required packages are installed.
+
+    Set the working directory to the folder containing the input .csv files.
+
+    Run the script line by line or as a whole.
+
+    The output will include:
+
+        Printed accuracy and metric tables.
+
+        Visual plots of confusion matrices and decision trees.
+
+        A radar chart comparing dictionary performance.
+
+Outputs
+
+    Accuracy summary table for each dictionary-based model.
+
+    Confusion matrices and classification reports.
+
+    Radar chart summarizing key evaluation metrics.
+
+    Visual representation of each decision tree used.
+
+Notes
+
+    The emotional valence variable (emotions) is treated as an ordered factor.
+
+    Oversampling is performed with replacement to ensure class balance.
+
+    Integer weights are used for compatibility with ctree() from the party package.
+
+    Radar chart metrics are manually defined for illustration and can be updated with calculated values.
